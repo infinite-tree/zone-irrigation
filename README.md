@@ -1,2 +1,7 @@
-# zone-irrigation
-6 zone irrigation controller with manual overrides
+
+# Multizone Irrigation Controller
+
+6 zone irrigation controller with flow rate and manual overrides.
+
+
+
