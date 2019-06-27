@@ -66,6 +66,8 @@ uint8_t CURRENT_VALVE;
 
 // Water Flow variables
 volatile uint32_t waterCounter = 0;
+uint32_t waterGPM = 0;
+bool waterReady = false;
 portMUX_TYPE MUX = portMUX_INITIALIZER_UNLOCKED;
 
 bool SW_VALVE1 = false;
@@ -87,24 +89,34 @@ void IRAM_ATTR waterMeterInterrupt()
     portEXIT_CRITICAL_ISR(&MUX);
 }
 
+void calculateWaterGPM()
+{
+    // Runs as close to exactly every 60 seconds as possible.
+    unsigned long now = timeClient.getEpochTime();
+    if (now - WATER_TIMER >= WATER_UPDATE_SECONDS) {
+        portENTER_CRITICAL(&MUX);
+        waterGPM = waterCounter;
+        waterCounter = 0;
+        portEXIT_CRITICAL(&MUX);
+
+        WATER_TIMER = now;
+        waterReady = true;
+
+        Serial.print("Gallons last minute: ");
+        Serial.println(waterGPM);
+        Serial.println();
+    }
+}
+
 void sendWaterMetric()
 {
-    // FIXME: Should this be done as a flow rate or absolute?
-    //        Absolute is problematic because if we unplug, everything is lost.
-    uint32_t gpm = 0;
+    if (waterReady) {
+        String tags = "location=" + config.Location + ",sensor=" + config.Sensor;
+        String fields = "value=" + String(waterGPM) + ".0";
+        sendDatapoint(WATER_MEASUREMENT, tags.c_str(), fields.c_str());
 
-    portENTER_CRITICAL(&MUX);
-    gpm = waterCounter;
-    waterCounter = 0;
-    portEXIT_CRITICAL(&MUX);
-
-    Serial.print("Gallons last minute: ");
-    Serial.println(gpm);
-    Serial.println();
-
-    String tags = "location=" + config.Location + ",sensor=" + config.Sensor;
-    String fields = "value=" + String(gpm) + ".0";
-    sendDatapoint(WATER_MEASUREMENT, tags.c_str(), fields.c_str());
+        waterReady = false;
+    }
 }
 
 void connectToWifi()
@@ -545,6 +557,11 @@ void IOHandler(void *pvParameters) {
                 break;
             }
         }
+
+        //
+        // Handle Calculating GPM
+        //
+        calculateWaterGPM();
         delay(50);
     }
 }
@@ -626,12 +643,8 @@ void InternetHandler(void *pvParameters) {
             INFLUX_TIMER = millis();
         }
 
-        unsigned long now = timeClient.getEpochTime();
-        if (now - WATER_TIMER > WATER_UPDATE_SECONDS)
-        {
-            sendWaterMetric();
-            WATER_TIMER = now;
-        }
+        // Run this every loop. It will send as necessary
+        sendWaterMetric();
 
         delay(100);
     }
