@@ -18,6 +18,8 @@
 #define INFLUX_UPDATE_INTERVAL  60*1000
 #define WATER_UPDATE_SECONDS   60
 #define SOLENOID_PULSE_LENGTH   100
+// Not sure why yet, but the counter seems to read a little high. ~15% higher flow rate than actual each time I measure
+#define WATER_TO_GPM            0.85
 
 #define START_BUTTON_PIN 26
 #define DATA_PIN    12
@@ -68,7 +70,8 @@ uint8_t CURRENT_VALVE;
 volatile uint32_t waterCounter = 0;
 uint32_t waterGPM = 0;
 bool waterReady = false;
-portMUX_TYPE MUX = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE WATER_COUNTER_MUX = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE WATER_GPM_MUX = portMUX_INITIALIZER_UNLOCKED;
 
 bool SW_VALVE1 = false;
 bool SW_VALVE2 = false;
@@ -84,9 +87,9 @@ uint8_t SHIFT_VALUE = 255;
 
 void IRAM_ATTR waterMeterInterrupt()
 {
-    portENTER_CRITICAL_ISR(&MUX);
+    portENTER_CRITICAL_ISR(&WATER_COUNTER_MUX);
     waterCounter++;
-    portEXIT_CRITICAL_ISR(&MUX);
+    portEXIT_CRITICAL_ISR(&WATER_COUNTER_MUX);
 }
 
 void calculateWaterGPM()
@@ -94,28 +97,46 @@ void calculateWaterGPM()
     // Runs as close to exactly every 60 seconds as possible.
     unsigned long now = timeClient.getEpochTime();
     if (now - WATER_TIMER >= WATER_UPDATE_SECONDS) {
-        portENTER_CRITICAL(&MUX);
-        waterGPM = waterCounter;
+        uint32_t gpm = 0;
+        portENTER_CRITICAL(&WATER_GPM_MUX);
+        portENTER_CRITICAL(&WATER_COUNTER_MUX);
+        waterGPM = waterCounter * WATER_TO_GPM;
+        portEXIT_CRITICAL(&WATER_COUNTER_MUX);
+
+        gpm = waterGPM;
         waterCounter = 0;
-        portEXIT_CRITICAL(&MUX);
+        waterReady = true;
+        portEXIT_CRITICAL(&WATER_GPM_MUX);
+
+        Serial.print("Now: ");
+        Serial.println(now);
+        Serial.print("PREVIOUS: ");
+        Serial.println(WATER_TIMER);
 
         WATER_TIMER = now;
-        waterReady = true;
 
         Serial.print("Gallons last minute: ");
-        Serial.println(waterGPM);
+        Serial.println(gpm);
         Serial.println();
     }
 }
 
 void sendWaterMetric()
 {
+    bool ready = false;
+    uint32_t gpm = 0;
+    portENTER_CRITICAL(&WATER_GPM_MUX);
+    ready = waterReady;
+    gpm = waterGPM;
     if (waterReady) {
-        String tags = "location=" + config.Location + ",sensor=" + config.Sensor;
-        String fields = "value=" + String(waterGPM) + ".0";
-        sendDatapoint(WATER_MEASUREMENT, tags.c_str(), fields.c_str());
-
         waterReady = false;
+    }
+    portEXIT_CRITICAL(&WATER_GPM_MUX);
+
+    if (ready) {
+        String tags = "location=" + config.Location + ",sensor=" + config.Sensor;
+        String fields = "value=" + String(gpm) + ".0";
+        sendDatapoint(WATER_MEASUREMENT, tags.c_str(), fields.c_str());
     }
 }
 
@@ -191,16 +212,16 @@ void switchOutput()
     for (int x = 0; x < 8; x++)
     {
         uint8_t output = SHIFT_VALUE & (1 << x);
-        Serial.print("BIT: ");
+        // Serial.print("BIT: ");
         if (output)
         {
             digitalWrite(DATA_PIN, HIGH);
-            Serial.println("1");
+            // Serial.println("1");
         }
         else
         {
             digitalWrite(DATA_PIN, LOW);
-            Serial.println("0");
+            // Serial.println("0");
         }
 
         digitalWrite(CLK_PIN, LOW);
@@ -210,7 +231,7 @@ void switchOutput()
     }
     digitalWrite(CLK_PIN, LOW);
     digitalWrite(LATCH_PIN, LOW);
-    Serial.println();
+    // Serial.println();
 }
 
 void outputOn(uint8_t valve)
