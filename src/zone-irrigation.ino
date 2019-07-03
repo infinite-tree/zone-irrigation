@@ -97,10 +97,11 @@ void calculateWaterGPM()
     // Runs as close to exactly every 60 seconds as possible.
     unsigned long now = timeClient.getEpochTime();
     if (now - WATER_TIMER >= WATER_UPDATE_SECONDS) {
+        unsigned long minSinceLastFlush = (now - WATER_TIMER)/60.00;
         uint32_t gpm = 0;
         portENTER_CRITICAL(&WATER_GPM_MUX);
         portENTER_CRITICAL(&WATER_COUNTER_MUX);
-        waterGPM = waterCounter * WATER_TO_GPM;
+        waterGPM = waterCounter / minSinceLastFlush * WATER_TO_GPM;
         portEXIT_CRITICAL(&WATER_COUNTER_MUX);
 
         gpm = waterGPM;
