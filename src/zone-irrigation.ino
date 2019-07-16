@@ -1,25 +1,18 @@
 #include <Arduino.h>
 // Downloaded from https://github.com/teebr/Influx-Arduino
 #include <InfluxArduino.hpp>
-#include <NTPClient.h>
 #include <WiFi.h>
-#include <WiFiUdp.h>
 
 #include "Config.h"
 #include "RootCert.hpp"
 
 
-#define NTP_SERVER  "pool.ntp.org"
-//Summar PST is GMT -7hrs
-#define NTP_OFFSET  -7*3600
-#define NTP_INTERVAL  15*1000
-#define NTP_UPDATE_INTERVAL 1*1000
 #define CONNECTION_RETRY 10
 #define INFLUX_UPDATE_INTERVAL  60*1000
-#define WATER_UPDATE_SECONDS   60
+#define WATER_UPDATE_MILLISECONDS   60*1000
 #define SOLENOID_PULSE_LENGTH   100
-// Not sure why yet, but the counter seems to read a little high. ~15% higher flow rate than actual each time I measure
-#define WATER_TO_GPM            0.85
+#define WATER_TO_GPM            0.5
+#define WATER_DEBOUNCE          75
 
 #define START_BUTTON_PIN 26
 #define DATA_PIN    12
@@ -57,17 +50,16 @@ TaskHandle_t IOTasks;
 
 Config config;
 InfluxArduino influx;
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, NTP_SERVER, NTP_OFFSET, NTP_INTERVAL);
 bool RUNNING = false;
-uint32_t NTP_TIMER;
-uint32_t INFLUX_TIMER;
+unsigned long INFLUX_TIMER;
 unsigned long WATER_TIMER;
 unsigned long ZONE_START_TIME;
 uint8_t CURRENT_VALVE;
 
+
 // Water Flow variables
 volatile uint32_t waterCounter = 0;
+volatile uint32_t waterDebounceTimer = 0;
 uint32_t waterGPM = 0;
 bool waterReady = false;
 portMUX_TYPE WATER_COUNTER_MUX = portMUX_INITIALIZER_UNLOCKED;
@@ -88,24 +80,28 @@ uint8_t SHIFT_VALUE = 255;
 void IRAM_ATTR waterMeterInterrupt()
 {
     portENTER_CRITICAL_ISR(&WATER_COUNTER_MUX);
-    waterCounter++;
+    uint32_t now = millis();
+    if (now - waterDebounceTimer > WATER_DEBOUNCE) {
+        waterDebounceTimer = now;
+        waterCounter++;
+    }
     portEXIT_CRITICAL_ISR(&WATER_COUNTER_MUX);
 }
 
 void calculateWaterGPM()
 {
     // Runs as close to exactly every 60 seconds as possible.
-    unsigned long now = timeClient.getEpochTime();
-    if (now - WATER_TIMER >= WATER_UPDATE_SECONDS) {
-        unsigned long minSinceLastFlush = (now - WATER_TIMER)/60.00;
+    unsigned long now = millis();
+    if (now - WATER_TIMER >= WATER_UPDATE_MILLISECONDS) {
+        unsigned long minSinceLastFlush = (now - WATER_TIMER)/(60.00*1000);
         uint32_t gpm = 0;
         portENTER_CRITICAL(&WATER_GPM_MUX);
         portENTER_CRITICAL(&WATER_COUNTER_MUX);
         waterGPM = waterCounter / minSinceLastFlush * WATER_TO_GPM;
+        waterCounter = 0;
         portEXIT_CRITICAL(&WATER_COUNTER_MUX);
 
         gpm = waterGPM;
-        waterCounter = 0;
         waterReady = true;
         portEXIT_CRITICAL(&WATER_GPM_MUX);
 
@@ -133,6 +129,7 @@ void sendWaterMetric()
         waterReady = false;
     }
     portEXIT_CRITICAL(&WATER_GPM_MUX);
+    // Serial.println("COUNTER: " + String(waterCounter));
 
     if (ready) {
         String tags = "location=" + config.Location + ",sensor=" + config.Sensor;
@@ -182,6 +179,13 @@ bool sendDatapoint(const char *measurement, const char *tags, const char *fields
         return false;
     }
 
+    Serial.print("MEASUREMENT: ");
+    Serial.print(measurement);
+    Serial.print(", tags: ");
+    Serial.print(tags);
+    Serial.print(", fields: ");
+    Serial.println(fields);
+
     return true;
 }
 
@@ -199,6 +203,11 @@ void reconfigureCheck()
         {
             // Reconfigure the sensor
             askForSettings(config);
+        }
+        else if (code == 'p' || code == 'P') {
+            askForPreferences(config);
+            saveConfig(config);
+            loadConfig(config);
         }
     }
 }
@@ -308,7 +317,7 @@ void pulseSolenoidClosed()
 }
 
 void valveOn(uint8_t valve) {
-    Serial.print(timeClient.getFormattedTime());
+    Serial.print(millis());
     Serial.print(" - Valve ");
     Serial.print(valve);
     Serial.println(": ON");
@@ -318,7 +327,7 @@ void valveOn(uint8_t valve) {
 }
 
 void valveOff(uint8_t valve) {
-    Serial.print(timeClient.getFormattedTime());
+    Serial.print(millis());
     Serial.print(" - Valve ");
     Serial.print(valve);
     Serial.println(": OFF");
@@ -329,7 +338,7 @@ void valveOff(uint8_t valve) {
 }
 
 void firstValve() {
-    Serial.print(timeClient.getFormattedTime());
+    Serial.print(millis());
     Serial.println(" - First Valve (1): ON");
     CURRENT_VALVE = 1;
 
@@ -338,7 +347,7 @@ void firstValve() {
 }
 
 void nextValve() {
-    Serial.print(timeClient.getFormattedTime());
+    Serial.print(millis());
     Serial.print(" - Valve ");
     Serial.print(CURRENT_VALVE);
     Serial.println(": OFF");
@@ -346,7 +355,7 @@ void nextValve() {
     pulseSolenoidClosed();
     CURRENT_VALVE++;
 
-    Serial.print(timeClient.getFormattedTime());
+    Serial.print(millis());
     Serial.print(" - Next Valve ");
     Serial.print(CURRENT_VALVE);
     Serial.println(": ON");
@@ -357,7 +366,7 @@ void nextValve() {
 
 
 void allValvesOff() {
-    Serial.print(timeClient.getFormattedTime());
+    Serial.print(millis());
     Serial.println(" - All Valves OFF ");
     CURRENT_VALVE = 0;
 
@@ -392,10 +401,11 @@ void IOHandler(void *pvParameters) {
             if (pressed)
             {
                 // Start the Zones!
-                Serial.print(timeClient.getFormattedTime());
+                ZONE_START_TIME = millis();
+
+                Serial.print(ZONE_START_TIME);
                 Serial.println(" - Start Button Pressed");
                 RUNNING = true;
-                ZONE_START_TIME = timeClient.getEpochTime();
                 firstValve();
                 delay(5 * 1000);
                 return;
@@ -418,7 +428,7 @@ void IOHandler(void *pvParameters) {
             if (pressed)
             {
                 // Emergency Stop
-                Serial.print(timeClient.getFormattedTime());
+                Serial.print(millis());
                 Serial.println(" - Cancel Button Pressed");
                 RUNNING = false;
                 allValvesOff();
@@ -529,10 +539,10 @@ void IOHandler(void *pvParameters) {
         //
         // Handle Cycling through the zones when running
         //
-        unsigned long nowSeconds = timeClient.getEpochTime();
-        if (RUNNING && nowSeconds % 60 == 0)
+        unsigned long now = millis();
+        if (RUNNING && now % 60 == 0)
         {
-            unsigned long elapsed_time = nowSeconds - ZONE_START_TIME;
+            unsigned long elapsed_time = (now - ZONE_START_TIME)/1000;
             switch (CURRENT_VALVE)
             {
             case 1:
@@ -592,16 +602,6 @@ void IOHandler(void *pvParameters) {
 void InternetHandler(void *pvParameters) {
     Serial.println("Internet Task Handler initiated");
     connectToWifi();
-    Serial.print("Getting time from NTP server...");
-    timeClient.begin();
-    timeClient.update();
-    Serial.println("Done");
-
-    Serial.print("Current Time: ");
-    Serial.println(timeClient.getFormattedTime());
-
-    WATER_TIMER = timeClient.getEpochTime();
-
     Serial.print("Setting up influxdb connection...");
 
     influx.configure(config.InfluxDatabase.c_str(), config.InfluxHostname.c_str());
@@ -610,15 +610,6 @@ void InternetHandler(void *pvParameters) {
     Serial.println("Done");
 
     for(;;) {
-        //
-        //  Keep Time updated
-        //
-        if (millis() - NTP_TIMER > NTP_UPDATE_INTERVAL)
-        {
-            timeClient.update();
-            NTP_TIMER = millis();
-        }
-
         //
         // Report Data
         //
@@ -698,15 +689,6 @@ void setup()
     pinMode(SW_VALVE6_PIN, INPUT);
     pinMode(SW_VALVE7_PIN, INPUT);
 
-    // Setup the start/cancel button
-    pinMode(START_BUTTON_PIN, INPUT);
-
-    // Setup the water flow meter as an interrupt
-    pinMode(WATER_METER_PIN, INPUT);
-    attachInterrupt(digitalPinToInterrupt(WATER_METER_PIN), waterMeterInterrupt, FALLING);
-
-    NTP_TIMER = millis();
-    INFLUX_TIMER = millis();
 
     loadConfig(config);
     if (config.Magic != CONFIG_MAGIC)
@@ -718,6 +700,17 @@ void setup()
     delay(1000);
     reconfigureCheck();
 
+    // Setup the start/cancel button
+    pinMode(START_BUTTON_PIN, INPUT);
+
+    // Setup the water flow meter as an interrupt
+    waterCounter = 0;
+    waterDebounceTimer = millis();
+
+    pinMode(WATER_METER_PIN, INPUT);
+    attachInterrupt(digitalPinToInterrupt(WATER_METER_PIN), waterMeterInterrupt, FALLING);
+
+    INFLUX_TIMER = millis();
 
     // Setup threads
     xTaskCreatePinnedToCore(IOHandler,

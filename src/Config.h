@@ -65,6 +65,7 @@ struct Config
 void loadConfig(Config &config);
 void saveConfig(Config &config);
 void printConfig(Config &config);
+void askForPreferences(Config &config);
 void askForSettings(Config &config);
 
 #endif

@@ -230,6 +230,27 @@ float readFloat()
     return input.toFloat();
 }
 
+
+void askForPreferences(Config &config)
+{
+    Serial.println("Zone 1 Duration in minutes (int)? ");
+    config.Zone1Duration = readInt();
+    Serial.println("Zone 2 Duration in minutes (int)? ");
+    config.Zone2Duration = readInt();
+    Serial.println("Zone 3 Duration in minutes (int)? ");
+    config.Zone3Duration = readInt();
+    Serial.println("Zone 4 Duration in minutes (int)? ");
+    config.Zone4Duration = readInt();
+    Serial.println("Zone 5 Duration in minutes (int)? ");
+    config.Zone5Duration = readInt();
+    Serial.println("Zone 6 Duration in minutes (int)? ");
+    config.Zone6Duration = readInt();
+    Serial.println("Drain Duration in SECONDS (int)? ");
+    config.DrainDuration = readInt();
+
+    Serial.println();
+}
+
 void askForSettings(Config &config)
 {
     Serial.println("########## Please configure the device ##########");
@@ -259,23 +280,7 @@ void askForSettings(Config &config)
 
     Serial.println();
 
-
-    Serial.println("Zone 1 Duration in minutes (int)? ");
-    config.Zone1Duration = readInt();
-    Serial.println("Zone 2 Duration in minutes (int)? ");
-    config.Zone2Duration = readInt();
-    Serial.println("Zone 3 Duration in minutes (int)? ");
-    config.Zone3Duration = readInt();
-    Serial.println("Zone 4 Duration in minutes (int)? ");
-    config.Zone4Duration = readInt();
-    Serial.println("Zone 5 Duration in minutes (int)? ");
-    config.Zone5Duration = readInt();
-    Serial.println("Zone 6 Duration in minutes (int)? ");
-    config.Zone6Duration = readInt();
-    Serial.println("Drain Duration in SECONDS (int)? ");
-    config.DrainDuration = readInt();
-
-    Serial.println();
+    askForPreferences(config);
 
     config.Magic = CONFIG_MAGIC;
     saveConfig(config);
