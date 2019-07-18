@@ -6,9 +6,8 @@
 #include "Config.h"
 #include "RootCert.hpp"
 
-
 #define CONNECTION_RETRY 10
-#define INFLUX_UPDATE_INTERVAL  60*1000
+#define INFLUX_UPDATE_MILLISECONDS  60*1000
 #define WATER_UPDATE_MILLISECONDS   60*1000
 #define SOLENOID_PULSE_LENGTH   100
 #define WATER_TO_GPM            0.5
@@ -41,41 +40,34 @@
 #define VALVE7_VALUE    191
 
 
-const char RUNNING_MEASUREMENT[] = "open_valve";
-const char WATER_MEASUREMENT[] = "water_gallons";
-
-TaskHandle_t InternetTasks;
-TaskHandle_t IOTasks;
+#define RUNNING_MEASUREMENT     "open_valve"
+#define WATER_MEASUREMENT        "water_gallons"
 
 
 Config config;
 InfluxArduino influx;
 bool RUNNING = false;
-unsigned long INFLUX_TIMER;
-unsigned long WATER_TIMER;
-unsigned long ZONE_START_TIME;
-uint8_t CURRENT_VALVE;
-
+unsigned long INFLUX_TIMER = 0;
+unsigned long WATER_TIMER = 0;
+unsigned long ZONE_START_TIME = 0;
+uint8_t CURRENT_VALVE = 0;
+uint8_t VALVE_TO_SEND = 1;
 
 // Water Flow variables
-volatile uint32_t waterCounter = 0;
-volatile uint32_t waterDebounceTimer = 0;
-uint32_t waterGPM = 0;
-bool waterReady = false;
+static DRAM_ATTR uint32_t waterCounter = 0;
+static DRAM_ATTR uint32_t waterDebounceTimer = 0;
 portMUX_TYPE WATER_COUNTER_MUX = portMUX_INITIALIZER_UNLOCKED;
-portMUX_TYPE WATER_GPM_MUX = portMUX_INITIALIZER_UNLOCKED;
 
 bool SW_VALVE1 = false;
-bool SW_VALVE2 = false;
 bool SW_VALVE3 = false;
 bool SW_VALVE4 = false;
+bool SW_VALVE2 = false;
 bool SW_VALVE5 = false;
 bool SW_VALVE6 = false;
 bool SW_VALVE7 = false;
 
 // Everything off (inverted output)
 uint8_t SHIFT_VALUE = 255;
-
 
 void IRAM_ATTR waterMeterInterrupt()
 {
@@ -88,22 +80,20 @@ void IRAM_ATTR waterMeterInterrupt()
     portEXIT_CRITICAL_ISR(&WATER_COUNTER_MUX);
 }
 
-void calculateWaterGPM()
+void sendWaterMetric()
 {
+
     // Runs as close to exactly every 60 seconds as possible.
     unsigned long now = millis();
-    if (now - WATER_TIMER >= WATER_UPDATE_MILLISECONDS) {
-        unsigned long minSinceLastFlush = (now - WATER_TIMER)/(60.00*1000);
+    if (now - WATER_TIMER >= WATER_UPDATE_MILLISECONDS)
+    {
+        unsigned long minSinceLastFlush = (now - WATER_TIMER) / (60.00 * 1000);
         uint32_t gpm = 0;
-        portENTER_CRITICAL(&WATER_GPM_MUX);
+
         portENTER_CRITICAL(&WATER_COUNTER_MUX);
-        waterGPM = waterCounter / minSinceLastFlush * WATER_TO_GPM;
+        gpm = waterCounter / minSinceLastFlush * WATER_TO_GPM;
         waterCounter = 0;
         portEXIT_CRITICAL(&WATER_COUNTER_MUX);
-
-        gpm = waterGPM;
-        waterReady = true;
-        portEXIT_CRITICAL(&WATER_GPM_MUX);
 
         Serial.print("Now: ");
         Serial.println(now);
@@ -115,23 +105,7 @@ void calculateWaterGPM()
         Serial.print("Gallons last minute: ");
         Serial.println(gpm);
         Serial.println();
-    }
-}
 
-void sendWaterMetric()
-{
-    bool ready = false;
-    uint32_t gpm = 0;
-    portENTER_CRITICAL(&WATER_GPM_MUX);
-    ready = waterReady;
-    gpm = waterGPM;
-    if (waterReady) {
-        waterReady = false;
-    }
-    portEXIT_CRITICAL(&WATER_GPM_MUX);
-    // Serial.println("COUNTER: " + String(waterCounter));
-
-    if (ready) {
         String tags = "location=" + config.Location + ",sensor=" + config.Sensor;
         String fields = "value=" + String(gpm) + ".0";
         sendDatapoint(WATER_MEASUREMENT, tags.c_str(), fields.c_str());
@@ -371,298 +345,192 @@ void allValvesOff() {
     CURRENT_VALVE = 0;
 
     // Pulse all currently running solenoids to turn them off,
-    // then disabl the shift register outputs
+    // then disable the shift register outputs
     pulseSolenoidClosed();
     allOutputsOff();
 }
 
+
+
+void checkZoneSwitches() {
+    if (digitalRead(SW_VALVE1_PIN) == LOW && SW_VALVE1 == false)
+    {
+        Serial.println("VALVE 1 FLIP SWITCHED ON");
+        valveOn(1);
+        SW_VALVE1 = true;
+    }
+    else if (digitalRead(SW_VALVE1_PIN) == HIGH && SW_VALVE1 == true)
+    {
+        Serial.println("VALVE 1 FLIP SWITCHED OFF");
+        valveOff(1);
+        SW_VALVE1 = false;
+    }
+
+    if (digitalRead(SW_VALVE2_PIN) == LOW && SW_VALVE2 == false)
+    {
+        Serial.println("VALVE 2 FLIP SWITCHED ON");
+        valveOn(2);
+        SW_VALVE2 = true;
+    }
+    else if (digitalRead(SW_VALVE2_PIN) == HIGH && SW_VALVE2 == true)
+    {
+        Serial.println("VALVE 2 FLIP SWITCHED OFF");
+        valveOff(2);
+        SW_VALVE2 = false;
+    }
+
+    if (digitalRead(SW_VALVE3_PIN) == LOW && SW_VALVE3 == false)
+    {
+        Serial.println("VALVE 3 FLIP SWITCHED ON");
+        valveOn(3);
+        SW_VALVE3 = true;
+    }
+    else if (digitalRead(SW_VALVE3_PIN) == HIGH && SW_VALVE3 == true)
+    {
+        Serial.println("VALVE 3 FLIP SWITCHED OFF");
+        valveOff(3);
+        SW_VALVE3 = false;
+    }
+
+    if (digitalRead(SW_VALVE4_PIN) == LOW && SW_VALVE4 == false)
+    {
+        Serial.println("VALVE 4 FLIP SWITCHED ON");
+        valveOn(4);
+        SW_VALVE4 = true;
+    }
+    else if (digitalRead(SW_VALVE4_PIN) == HIGH && SW_VALVE4 == true)
+    {
+        Serial.println("VALVE 4 FLIP SWITCHED OFF");
+        valveOff(4);
+        SW_VALVE4 = false;
+    }
+
+    if (digitalRead(SW_VALVE5_PIN) == LOW && SW_VALVE5 == false)
+    {
+        Serial.println("VALVE 5 FLIP SWITCHED ON");
+        valveOn(5);
+        SW_VALVE5 = true;
+    }
+    else if (digitalRead(SW_VALVE5_PIN) == HIGH && SW_VALVE5 == true)
+    {
+        Serial.println("VALVE 5 FLIP SWITCHED OFF");
+        valveOff(5);
+        SW_VALVE5 = false;
+    }
+
+    if (digitalRead(SW_VALVE6_PIN) == LOW && SW_VALVE6 == false)
+    {
+        Serial.println("VALVE 6 FLIP SWITCHED ON");
+        valveOn(6);
+        SW_VALVE6 = true;
+    }
+    else if (digitalRead(SW_VALVE6_PIN) == HIGH && SW_VALVE6 == true)
+    {
+        Serial.println("VALVE 6 FLIP SWITCHED OFF");
+        valveOff(6);
+        SW_VALVE6 = false;
+    }
+
+    if (digitalRead(SW_VALVE7_PIN) == LOW && SW_VALVE7 == false)
+    {
+        Serial.println("VALVE 7 FLIP SWITCHED ON");
+        valveOn(7);
+        SW_VALVE7 = true;
+    }
+    else if (digitalRead(SW_VALVE7_PIN) == HIGH && SW_VALVE7 == true)
+    {
+        Serial.println("VALVE 7 FLIP SWITCHED OFF");
+        valveOff(7);
+        SW_VALVE7 = false;
+    }
+}
+
+
+void checkStartCancel() {
+    if (!RUNNING)
+    {
+        //  All 3 consecutive reads must be HIGH for
+        //  the button to register pressed.
+        bool pressed = true;
+        for (uint8_t x = 0; x < 3; x++)
+        {
+            if (digitalRead(START_BUTTON_PIN) == LOW)
+            {
+                pressed = false;
+                break;
+            }
+            delay(5);
+        }
+        if (pressed)
+        {
+            // Start the Zones!
+            ZONE_START_TIME = millis();
+
+            Serial.print(ZONE_START_TIME);
+            Serial.println(" - Start Button Pressed");
+            RUNNING = true;
+            firstValve();
+            delay(5 * 1000);
+            return;
+        }
+        delay(10);
+    }
+    else
+    {
+        // Look for cancelation press
+        bool pressed = true;
+        for (uint8_t x = 0; x < 3; x++)
+        {
+            if (digitalRead(START_BUTTON_PIN) == LOW)
+            {
+                pressed = false;
+                break;
+            }
+            delay(5);
+        }
+        if (pressed)
+        {
+            // Emergency Stop
+            Serial.print(millis());
+            Serial.println(" - Cancel Button Pressed");
+            RUNNING = false;
+            allValvesOff();
+            delay(5 * 1000);
+            return;
+        }
+        delay(10);
+    }
+}
+
+
+uint8_t getValveState(uint8_t valve) {
+    if (RUNNING)
+    {
+        if (CURRENT_VALVE == valve)
+            return 1;
+    } else {
+        if (SW_VALVE1 && valve == 1)
+            return 1;
+        if (SW_VALVE2 && valve == 2)
+            return 1;
+        if (SW_VALVE3 && valve == 3)
+            return 1;
+        if (SW_VALVE4 && valve == 4)
+            return 1;
+        if (SW_VALVE5 && valve == 5)
+            return 1;
+        if (SW_VALVE6 && valve == 6)
+            return 1;
+        if (SW_VALVE7 && valve == 7)
+            return 1;
+    }
+    return 0;
+}
+
+
 // ----------------------------------------------------------------------------
 // Setup and Main loops
 // ----------------------------------------------------------------------------
-void IOHandler(void *pvParameters) {
-    for(;;) {
-        //
-        // Handle Button Presses
-        //
-        if (!RUNNING)
-        {
-            //  All 3 consecutive reads must be HIGH for
-            //  the button to register pressed.
-            bool pressed = true;
-            for (uint8_t x = 0; x < 3; x++)
-            {
-                if (digitalRead(START_BUTTON_PIN) == LOW)
-                {
-                    pressed = false;
-                    break;
-                }
-                delay(5);
-            }
-            if (pressed)
-            {
-                // Start the Zones!
-                ZONE_START_TIME = millis();
-
-                Serial.print(ZONE_START_TIME);
-                Serial.println(" - Start Button Pressed");
-                RUNNING = true;
-                firstValve();
-                delay(5 * 1000);
-                return;
-            }
-            delay(10);
-        }
-        else
-        {
-            // Look for cancelation press
-            bool pressed = true;
-            for (uint8_t x = 0; x < 3; x++)
-            {
-                if (digitalRead(START_BUTTON_PIN) == LOW)
-                {
-                    pressed = false;
-                    break;
-                }
-                delay(5);
-            }
-            if (pressed)
-            {
-                // Emergency Stop
-                Serial.print(millis());
-                Serial.println(" - Cancel Button Pressed");
-                RUNNING = false;
-                allValvesOff();
-                delay(5 * 1000);
-                return;
-            }
-            delay(10);
-        }
-
-        //
-        // Check Zone Switches
-        //
-        if (!RUNNING)
-        {
-
-            if (digitalRead(SW_VALVE1_PIN) == LOW && SW_VALVE1 == false)
-            {
-                Serial.println("VALVE 1 FLIP SWITCHED ON");
-                valveOn(1);
-                SW_VALVE1 = true;
-            }
-            else if (digitalRead(SW_VALVE1_PIN) == HIGH && SW_VALVE1 == true)
-            {
-                Serial.println("VALVE 1 FLIP SWITCHED OFF");
-                valveOff(1);
-                SW_VALVE1 = false;
-            }
-
-            if (digitalRead(SW_VALVE2_PIN) == LOW && SW_VALVE2 == false)
-            {
-                Serial.println("VALVE 2 FLIP SWITCHED ON");
-                valveOn(2);
-                SW_VALVE2 = true;
-            }
-            else if (digitalRead(SW_VALVE2_PIN) == HIGH && SW_VALVE2 == true)
-            {
-                Serial.println("VALVE 2 FLIP SWITCHED OFF");
-                valveOff(2);
-                SW_VALVE2 = false;
-            }
-
-            if (digitalRead(SW_VALVE3_PIN) == LOW && SW_VALVE3 == false)
-            {
-                Serial.println("VALVE 3 FLIP SWITCHED ON");
-                valveOn(3);
-                SW_VALVE3 = true;
-            }
-            else if (digitalRead(SW_VALVE3_PIN) == HIGH && SW_VALVE3 == true)
-            {
-                Serial.println("VALVE 3 FLIP SWITCHED OFF");
-                valveOff(3);
-                SW_VALVE3 = false;
-            }
-
-            if (digitalRead(SW_VALVE4_PIN) == LOW && SW_VALVE4 == false)
-            {
-                Serial.println("VALVE 4 FLIP SWITCHED ON");
-                valveOn(4);
-                SW_VALVE4 = true;
-            }
-            else if (digitalRead(SW_VALVE4_PIN) == HIGH && SW_VALVE4 == true)
-            {
-                Serial.println("VALVE 4 FLIP SWITCHED OFF");
-                valveOff(4);
-                SW_VALVE4 = false;
-            }
-
-            if (digitalRead(SW_VALVE5_PIN) == LOW && SW_VALVE5 == false)
-            {
-                Serial.println("VALVE 5 FLIP SWITCHED ON");
-                valveOn(5);
-                SW_VALVE5 = true;
-            }
-            else if (digitalRead(SW_VALVE5_PIN) == HIGH && SW_VALVE5 == true)
-            {
-                Serial.println("VALVE 5 FLIP SWITCHED OFF");
-                valveOff(5);
-                SW_VALVE5 = false;
-            }
-
-            if (digitalRead(SW_VALVE6_PIN) == LOW && SW_VALVE6 == false)
-            {
-                Serial.println("VALVE 6 FLIP SWITCHED ON");
-                valveOn(6);
-                SW_VALVE6 = true;
-            }
-            else if (digitalRead(SW_VALVE6_PIN) == HIGH && SW_VALVE6 == true)
-            {
-                Serial.println("VALVE 6 FLIP SWITCHED OFF");
-                valveOff(6);
-                SW_VALVE6 = false;
-            }
-
-            if (digitalRead(SW_VALVE7_PIN) == LOW && SW_VALVE7 == false)
-            {
-                Serial.println("VALVE 7 FLIP SWITCHED ON");
-                valveOn(7);
-                SW_VALVE7 = true;
-            }
-            else if (digitalRead(SW_VALVE7_PIN) == HIGH && SW_VALVE7 == true)
-            {
-                Serial.println("VALVE 7 FLIP SWITCHED OFF");
-                valveOff(7);
-                SW_VALVE7 = false;
-            }
-        }
-
-        //
-        // Handle Cycling through the zones when running
-        //
-        unsigned long now = millis();
-        if (RUNNING && now % 60 == 0)
-        {
-            unsigned long elapsed_time = (now - ZONE_START_TIME)/1000;
-            switch (CURRENT_VALVE)
-            {
-            case 1:
-                if (elapsed_time >= (config.Zone1Duration * 60))
-                    nextValve();
-                break;
-
-            case 2:
-                if (elapsed_time >= (config.Zone2Duration * 60))
-                    nextValve();
-                break;
-
-            case 3:
-                if (elapsed_time >= (config.Zone3Duration * 60))
-                    nextValve();
-                break;
-
-            case 4:
-                if (elapsed_time >= (config.Zone4Duration * 60))
-                    nextValve();
-                break;
-
-            case 5:
-                if (elapsed_time >= (config.Zone5Duration * 60))
-                    nextValve();
-                break;
-
-            case 6:
-                if (elapsed_time >= (config.Zone6Duration * 60))
-                    nextValve();
-                break;
-
-            case 7:
-                if (elapsed_time >= (config.DrainDuration))
-                {
-                    allValvesOff();
-                    RUNNING = false;
-                }
-                break;
-
-            default:
-                Serial.println("RUNTIME ERROR: default case reached");
-                allValvesOff();
-                break;
-            }
-        }
-
-        //
-        // Handle Calculating GPM
-        //
-        calculateWaterGPM();
-        delay(50);
-    }
-}
-
-
-void InternetHandler(void *pvParameters) {
-    Serial.println("Internet Task Handler initiated");
-    connectToWifi();
-    Serial.print("Setting up influxdb connection...");
-
-    influx.configure(config.InfluxDatabase.c_str(), config.InfluxHostname.c_str());
-    influx.authorize(config.InfluxUser.c_str(), config.InfluxPassword.c_str());
-    influx.addCertificate(ROOT_CERT);
-    Serial.println("Done");
-
-    for(;;) {
-        //
-        // Report Data
-        //
-        if (millis() - INFLUX_TIMER > INFLUX_UPDATE_INTERVAL)
-        {
-            // Each Zone gets a status report once a minute
-            for (int x = 1; x < 8; x++)
-            {
-                String tags = "";
-                String fields = "";
-                int v = 0;
-                if (RUNNING) {
-                    if (CURRENT_VALVE == x) {
-                        v = 1;
-                    }
-                } else {
-                    if (SW_VALVE1 && x == 1) {
-                        v = 1;
-                    }
-                    if (SW_VALVE2 && x == 2) {
-                        v = 1;
-                    }
-                    if (SW_VALVE3 && x == 3) {
-                        v = 1;
-                    }
-                    if (SW_VALVE4 && x == 4) {
-                        v = 1;
-                    }
-                    if (SW_VALVE5 && x == 5) {
-                        v = 1;
-                    }
-                    if (SW_VALVE6 && x == 6) {
-                        v = 1;
-                    }
-                    if (SW_VALVE7 && x == 7) {
-                        v = 1;
-                    }
-                }
-
-                tags = "location=" + config.Location + ",sensor=" + config.Sensor + ",valve=" + String(x);
-                fields = "value=" + String(v);
-                sendDatapoint(RUNNING_MEASUREMENT, tags.c_str(), fields.c_str());
-            }
-            INFLUX_TIMER = millis();
-        }
-
-        // Run this every loop. It will send as necessary
-        sendWaterMetric();
-
-        delay(100);
-    }
-}
-
 void setup()
 {
     Serial.begin(115200);
@@ -689,7 +557,6 @@ void setup()
     pinMode(SW_VALVE6_PIN, INPUT);
     pinMode(SW_VALVE7_PIN, INPUT);
 
-
     loadConfig(config);
     if (config.Magic != CONFIG_MAGIC)
     {
@@ -700,6 +567,9 @@ void setup()
     delay(1000);
     reconfigureCheck();
 
+    pinMode(WATER_METER_PIN, INPUT);
+    attachInterrupt(digitalPinToInterrupt(WATER_METER_PIN), waterMeterInterrupt, FALLING);
+
     // Setup the start/cancel button
     pinMode(START_BUTTON_PIN, INPUT);
 
@@ -707,32 +577,109 @@ void setup()
     waterCounter = 0;
     waterDebounceTimer = millis();
 
-    pinMode(WATER_METER_PIN, INPUT);
-    attachInterrupt(digitalPinToInterrupt(WATER_METER_PIN), waterMeterInterrupt, FALLING);
-
     INFLUX_TIMER = millis();
 
-    // Setup threads
-    xTaskCreatePinnedToCore(IOHandler,
-                            "IOTasks",
-                            10000,
-                            NULL,
-                            0,
-                            &IOTasks,
-                            0);
+    Serial.println("Internet Task Handler initiated");
+    connectToWifi();
+    Serial.print("Setting up influxdb connection...");
 
-    xTaskCreatePinnedToCore(InternetHandler,
-                            "InternetTasks",
-                            10000,
-                            NULL,
-                            1,
-                            &InternetTasks,
-                            1);
+    influx.configure(config.InfluxDatabase.c_str(), config.InfluxHostname.c_str());
+    influx.authorize(config.InfluxUser.c_str(), config.InfluxPassword.c_str());
+    influx.addCertificate(ROOT_CERT);
+    Serial.println("Done");
 
-    Serial.println("Tasks created. Setup Complete");
+    Serial.println("Setup Complete");
 }
 
 void loop()
 {
+    //
+    // Handle Button Presses
+    //
+    checkStartCancel();
 
+    //
+    // Check Zone Switches
+    //
+    if (!RUNNING)
+    {
+        checkZoneSwitches();
+    }
+
+    //
+    // Handle Cycling through the zones when running
+    //
+    unsigned long now = millis();
+    if (RUNNING && now % 60 == 0)
+    {
+        unsigned long elapsed_time = (now - ZONE_START_TIME) / 1000;
+        switch (CURRENT_VALVE)
+        {
+        case 1:
+            if (elapsed_time >= (config.Zone1Duration * 60))
+                nextValve();
+            break;
+
+        case 2:
+            if (elapsed_time >= (config.Zone2Duration * 60))
+                nextValve();
+            break;
+
+        case 3:
+            if (elapsed_time >= (config.Zone3Duration * 60))
+                nextValve();
+            break;
+
+        case 4:
+            if (elapsed_time >= (config.Zone4Duration * 60))
+                nextValve();
+            break;
+
+        case 5:
+            if (elapsed_time >= (config.Zone5Duration * 60))
+                nextValve();
+            break;
+
+        case 6:
+            if (elapsed_time >= (config.Zone6Duration * 60))
+                nextValve();
+            break;
+
+        case 7:
+            if (elapsed_time >= (config.DrainDuration))
+            {
+                allValvesOff();
+                RUNNING = false;
+            }
+            break;
+
+        default:
+            Serial.println("RUNTIME ERROR: default case reached");
+            allValvesOff();
+            break;
+        }
+    }
+
+    //
+    // Report Data
+    //
+    if (millis() - INFLUX_TIMER > INFLUX_UPDATE_MILLISECONDS)
+    {
+        String tags = "";
+        String fields = "";
+        int v = getValveState(VALVE_TO_SEND);
+
+        tags = "location=" + config.Location + ",sensor=" + config.Sensor + ",valve=" + String(VALVE_TO_SEND);
+        fields = "value=" + String(v);
+        sendDatapoint(RUNNING_MEASUREMENT, tags.c_str(), fields.c_str());
+
+        if (VALVE_TO_SEND == 7) {
+            INFLUX_TIMER = millis();
+            VALVE_TO_SEND = 1;
+        }
+        VALVE_TO_SEND++;
+    }
+
+    // Run this every loop. It will send as necessary
+    sendWaterMetric();
 }

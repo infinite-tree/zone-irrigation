@@ -5,3 +5,6 @@
 
 
 
+## ESP32 Tips
+**Dont use Pins 6 - 11**
+
