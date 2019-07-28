@@ -1,10 +1,25 @@
+# 6 Zone Irrigation Controller with drain valve
 
-# Multizone Irrigation Controller
-
-6 zone irrigation controller with flow rate and manual overrides.
-
+Turn on and off irrigation zones while logging data to influxdb.
 
 
-## ESP32 Tips
-**Dont use Pins 6 - 11**
+## Status
+Experimental
+
+
+## Software Dependencies
+
+  - pySerial
+  - python-apscheduler
+  - flask
+  - influxdb
+
+
+## Installation
+
+```
+sudo cp zone-irrigation.service /lib/systemd/system/
+sudo systemctl enable zone-irrigation.service
+sudo systemctl start zone-rrigation.service
+```
 

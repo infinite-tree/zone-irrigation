@@ -1,0 +1,13 @@
+ [Unit]
+ Description=Zone Irrigation Service
+ After=multi-user.target
+
+ [Service]
+ Type=idle
+ ExecStart=/usr/bin/env IS_PROD=1 /usr/bin/python /home/pi/zone-irrigation/zone-irrigation.py
+ User=pi
+ Group=pi
+ Restart=always
+
+ [Install]
+ WantedBy=multi-user.target
