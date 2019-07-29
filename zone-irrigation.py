@@ -137,7 +137,7 @@ class Arduino(object):
         self.Stream = serial.Serial(self.SerialDevice, 57600, timeout=1)
 
         for x in range(5):
-            self.Stream.write(str("I"))
+            self.Stream.write("I".encode())
             if self.Stream.readline().strip() == "I":
                 return
             else:
@@ -168,7 +168,7 @@ class Arduino(object):
                     self.Log.debug(discard)
 
             for x in range(12):
-                self.Stream.write((str(value)))
+                self.Stream.write(str(value).encode())
                 response = self.Stream.readline()
                 while len(response) > 0:
                     if response.startswith('D'):
