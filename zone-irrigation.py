@@ -137,7 +137,7 @@ class Arduino(object):
         self.Stream = serial.Serial(self.SerialDevice, 57600, timeout=1)
 
         for x in range(5):
-            self.Stream.write("I")
+            self.Stream.write(str("I"))
             if self.Stream.readline().strip() == "I":
                 return
             else:
@@ -365,12 +365,13 @@ class IrrigationController(object):
     def getWaterCounter(self):
         return self.Arduino.getWaterCounter()
 
-    def getGPM(self):
-        now = time.time()
-        count = self.Arduino.getWaterCounter()
-        gpm = count / ((now - self.LastGPMTime)/60.0)
-        self.LastGPMTime = now
-        return gpm
+    # All request to getWaterCOunter impact this. Move to Arduino class
+    # def getGPM(self):
+    #     now = time.time()
+    #     count = self.Arduino.getWaterCounter()
+    #     gpm = count / ((now - self.LastGPMTime)/60.0)
+    #     self.LastGPMTime = now
+    #     return gpm
 
     def startCancelCheck(self):
         # FIXME: implement

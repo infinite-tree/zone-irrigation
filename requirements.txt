@@ -1,0 +1,5 @@
+pytz
+influxdb
+pyserial
+apscheduler
+flask
