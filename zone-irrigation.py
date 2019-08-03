@@ -265,10 +265,11 @@ class WaterMeter(object):
         now = time.time()
         if now - self.LastGPMRequest >= 60:
             self.LastGPMRequest = now
+            # LastWaterReading is updated when ever Counter is accessed
             last = self.LastWaterReading
             count = self.Counter
             # Caclulate gallon per minute and then divide by two since the counter triggers twice per gallon
-            self.SavedGPM = float(count) / ((self.LastWaterReading - last) / 60.0) / 2.0
+            self.SavedGPM = float(count) / ((now - last) / 60.0) / 2.0
 
         return self.SavedGPM
 
