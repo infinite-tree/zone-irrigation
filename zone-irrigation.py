@@ -318,19 +318,19 @@ class InfluxWrapper(object):
         self.Log.error("%s - Failed to send %d points to Influx: %s"%(datetime.datetime.now(), len(self.Points), ret))
         return ret
 
-    def sendMeasurement(self, measurement, outlet, value):
+    def sendMeasurement(self, measurement, tags, value):
         point = {
             "measurement": measurement,
             "tags": {
                 "location": self.Location,
-                "controller": self.Controller,
-                "outlet": outlet
+                "controller": self.Controller
             },
             "time": self.getTime(),
             "fields": {
                 "value": value
             }
         }
+        point['tags'].update(tags)
 
         self.Points.append(point)
 
@@ -359,13 +359,13 @@ class IrrigationController(object):
     def run(self):
         self.Arduino.handleDebugMessages()
         self.Log.info("%s - Loop" % (datetime.datetime.now()))
-        self.Influx.sendMeasurement("water_gallons", "none", self.WaterMeter.GPM)
+        self.Influx.sendMeasurement("water_gallons", {}, self.WaterMeter.GPM)
 
         open_valves = self.Arduino.getOpenValves()
         for valve in self.Valves:
-            self.Influx.sendMeasurement("open_valve", "valve="+str(valve.Number), 1.0 if valve.Number in open_valves else 0.0)
+            self.Influx.sendMeasurement("open_valve", {"valve":str(valve.Number)}, 1.0 if valve.Number in open_valves else 0.0)
 
-        self.Influx.sendMeasurement("program_running", "none", self.Arduino.isProgramRunning())
+        self.Influx.sendMeasurement("program_running", {}, self.Arduino.isProgramRunning())
         # self.refuelCheck(60)
 
 def reboot(log):
