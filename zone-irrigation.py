@@ -162,13 +162,13 @@ class Arduino(object):
             self.Log.error("Serial exception: %s" % (e), exc_info=1)
             self.resetSerial()
 
-        print("######## Response: '%s'"%(response))
+        self.Log.debug("SERIAL - Response: '%s'"%(response))
         return response
 
     def _sendData(self, value):
         self._readResponse()
         v = bytes(value, 'utf-8')
-        print("########## SENDING: %s"%(v))
+        self.Log.debug("SERIAL - Sending: %s"%(v))
         self.Stream.write(v)
         return self._readResponse()
 
@@ -177,7 +177,6 @@ class Arduino(object):
 
     def getOpenValves(self):
         valves = self._sendData("V")
-        print("######## OPEN VALVES: '%s'"%(valves))
         return [int(c) for c in valves]
 
     def getWaterCounter(self):
