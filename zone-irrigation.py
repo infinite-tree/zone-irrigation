@@ -423,8 +423,8 @@ def main():
     controller = IrrigationController(log, valves, water_meter, influx, arduino, config)
     app.controller = controller
 
-    import pdb
-    pdb.set_trace()
+    # import pdb
+    # pdb.set_trace()
 
     ######################################################
     log.info("%s - ENTERING RUN LOOP"%(datetime.datetime.now()))
