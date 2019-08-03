@@ -267,7 +267,8 @@ class WaterMeter(object):
             self.LastGPMRequest = now
             last = self.LastWaterReading
             count = self.Counter
-            self.SavedGPM = float(count) / (self.LastWaterReading - last)
+            # Caclulate gallon per minute and then divide by two since the counter triggers twice per gallon
+            self.SavedGPM = float(count) / ((self.LastWaterReading - last) / 60.0) / 2.0
 
         return self.SavedGPM
 
@@ -414,8 +415,8 @@ def main():
 
     log.info("%s - Setting up valve objects"%(datetime.datetime.now()))
     valves = []
-    for name, conf in config["valves"].items():
-        valves.append(Valve(name, log, conf, influx, arduino))
+    for number, conf in config["valves"].items():
+        valves.append(Valve(int(number), log, conf, influx, arduino))
 
     log.info("%s - Initializing Water Meter"%(datetime.datetime.now()))
     water_meter = WaterMeter(influx, arduino, log)
