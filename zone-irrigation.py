@@ -67,7 +67,7 @@ config = {
 ###################################################################
 @app.route("/counter")
 def counter():
-    return json.dumps({"counter": app.controller.getWaterCounter()})
+    return json.dumps({"counter": app.controller.WaterMeter.Counter})
 
 @app.route("/valves")
 def valves():
@@ -80,7 +80,7 @@ def valves():
 
 @app.route("/gpm")
 def gpm():
-    return json.dumps({"gpm": app.controller.getGPM()})
+    return json.dumps({"gpm": app.controller.WaterMeter.SavedGPM})
 
 @app.route("/start", methods=["POST"])
 def start():
@@ -136,13 +136,8 @@ class Arduino(object):
         self.SerialDevice = sorted(serial_devices)[-1]
         self.Stream = serial.Serial(self.SerialDevice, 57600, timeout=1)
 
-        for x in range(5):
-            self.Stream.write("I".encode())
-            if self.Stream.readline().strip() == "I":
-                return
-            else:
-                time.sleep(0.1)
-
+        if self._sendData('I') == 'I':
+            return
         # still not reset
         self.Log.error("Failed to reset Serial!!!")
 
@@ -157,51 +152,36 @@ class Arduino(object):
         time.sleep(2)
         self._newSerial()
 
-    def _sendData(self, value):
+    def _readResponse(self):
         try:
-            discard = self.Stream.readline()
-            if discard.startswith('D'):
-                self.Log.debug(discard)
-            while len(discard) > 0:
-                discard = self.Stream.readline()
-                if discard.startswith('D'):
-                    self.Log.debug(discard)
-
-            for x in range(12):
-                self.Stream.write(str(value).encode())
-                response = self.Stream.readline()
-                while len(response) > 0:
-                    if response.startswith('D'):
-                        self.Log.debug(response)
-                        response = self.Stream.readline()
-                    else:
-                        return str(response.strip())
-
-                # got no response
-                self.Log.error("Serial not responding")
-                self.resetSerial()
-        except Exception as e:
-            self.Log.error("Serial exception: %s"%(e), exc_info=1)
-            self.resetSerial()
-
-            return None
-
-    def handleDebugMessages(self):
-        try:
-            debug = self.Stream.readline()
-            self.Log.debug(debug)
-            while len(debug) > 0:
-                debug = self.Stream.readline()
-                self.Log.debug(debug)
+            response = self.Stream.readline().decode('utf-8').strip()
+            while len(response) > 0 and response.startswith('D'):
+                self.Log.debug(response)
+                response = self.Stream.readline().decode('utf-8').strip()
         except Exception as e:
             self.Log.error("Serial exception: %s" % (e), exc_info=1)
             self.resetSerial()
 
+        print("######## Response: '%s'"%(response))
+        return response
+
+    def _sendData(self, value):
+        self._readResponse()
+        v = bytes(value, 'utf-8')
+        print("########## SENDING: %s"%(v))
+        self.Stream.write(v)
+        return self._readResponse()
+
+    def handleDebugMessages(self):
+        self._readResponse()
+
     def getOpenValves(self):
         valves = self._sendData("V")
+        print("######## OPEN VALVES: '%s'"%(valves))
         return [int(c) for c in valves]
 
     def getWaterCounter(self):
+        # This should only be called via the WaterMeter class
         try:
             return int(self._sendData("W"))
         except Exception:
@@ -272,15 +252,25 @@ class WaterMeter(object):
         self.Influx = influx
         self.Log = log
         self.Arduino = arduino
+        self.LastWaterReading = time.time()
+        self.LastGPMRequest = time.time()
+        self.SavedGPM = 0.0
 
     @property
     def Counter(self):
+        self.LastWaterReading = time.time()
         return self.Arduino.getWaterCounter()
 
     @property
-    def Gpm(self):
-        # FIXME: implement
-        return 0.0
+    def GPM(self):
+        now = time.time()
+        if now - self.LastGPMRequest >= 60:
+            self.LastGPMRequest = now
+            last = self.LastWaterReading
+            count = self.Counter
+            self.SavedGPM = float(count) / (self.LastWaterReading - last)
+
+        return self.SavedGPM
 
 
 class InfluxWrapper(object):
@@ -362,32 +352,21 @@ class IrrigationController(object):
         self.Arduino = arduino
         self.LastGPMTime = time.time()
 
-    def getWaterCounter(self):
-        return self.Arduino.getWaterCounter()
-
-    # All request to getWaterCOunter impact this. Move to Arduino class
-    # def getGPM(self):
-    #     now = time.time()
-    #     count = self.Arduino.getWaterCounter()
-    #     gpm = count / ((now - self.LastGPMTime)/60.0)
-    #     self.LastGPMTime = now
-    #     return gpm
-
     def startCancelCheck(self):
         # FIXME: implement
         return
 
     def run(self):
-            self.Log.info("%s - Loop" % (datetime.datetime.now()))
-            # self.Log.info("%s - Current Temp: %.1f, humidity: %.1f"%(datetime.datetime.now(), temp, humidity))
-            self.Influx.sendMeasurement("water_gallons", "none", self.WaterMeter.Gpm)
+        self.Arduino.handleDebugMessages()
+        self.Log.info("%s - Loop" % (datetime.datetime.now()))
+        self.Influx.sendMeasurement("water_gallons", "none", self.WaterMeter.GPM)
 
-            open_valves = self.Arduino.getOpenValves()
-            for valve in self.Valves:
-                self.Influx.sendMeasurement("open_valve", "valve="+str(valve.Number), 1.0 if valve.Number in open_valves else 0.0)
+        open_valves = self.Arduino.getOpenValves()
+        for valve in self.Valves:
+            self.Influx.sendMeasurement("open_valve", "valve="+str(valve.Number), 1.0 if valve.Number in open_valves else 0.0)
 
-            self.Influx.sendMeasurement("program_running", "none", self.Arduino.isProgramRunning())
-            # self.refuelCheck(60)
+        self.Influx.sendMeasurement("program_running", "none", self.Arduino.isProgramRunning())
+        # self.refuelCheck(60)
 
 def reboot(log):
     # if os.path.isfile(os.path.expanduser("~/.reboot")):
