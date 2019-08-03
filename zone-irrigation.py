@@ -35,29 +35,29 @@ app = Flask(__name__)
 config = {
     "valves": {
         1: {
-            "minutes": 100.0,
+            "minutes": 360.0,
         },
         2: {
-            "minutes": 100.0,
+            "minutes": 360.0,
         },
         3: {
-            "minutes": 100.0,
+            "minutes": 360.0,
         },
         4: {
-            "minutes": 100.0,
+            "minutes": 360.0,
         },
         5: {
-            "minutes": 100.0,
+            "minutes": 360.0,
         },
         6: {
-            "minutes": 100.0,
+            "minutes": 0.0,
         },
         7: {
             "minutes": 0.5,
         }
     },
      "site": {
-        "location": "Farm House",
+        "location": "FIELD1",
         "controller": "irrigation1"
     }
 }
@@ -72,7 +72,7 @@ def counter():
 @app.route("/valves")
 def valves():
     v = {}
-    open_valves = app.controller.getOpenValves()
+    open_valves = app.controller.Arduino.getOpenValves()
     for valve in app.controller.Valves:
         v[valve.Number] = valve.Number in open_valves
 
@@ -383,7 +383,7 @@ def reboot(log):
 
 def main():
     log = logging.getLogger('ZoneIrrigationtLogger')
-    log.setLevel(logging.INFO)
+    log.setLevel(logging.DEBUG)
     log_file = os.path.realpath(os.path.expanduser(LOG_FILE))
     # FIXME: TimedFileHandler
     handler = logging.handlers.RotatingFileHandler(log_file, maxBytes=500000, backupCount=5)
@@ -424,8 +424,8 @@ def main():
     controller = IrrigationController(log, valves, water_meter, influx, arduino, config)
     app.controller = controller
 
-    # import pdb
-    # pdb.set_trace()
+    import pdb
+    pdb.set_trace()
 
     ######################################################
     log.info("%s - ENTERING RUN LOOP"%(datetime.datetime.now()))
