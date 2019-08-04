@@ -268,8 +268,8 @@ class WaterMeter(object):
             # LastWaterReading is updated when ever Counter is accessed
             last = self.LastWaterReading
             count = self.Counter
-            # Caclulate gallon per minute and then divide by two since the counter triggers twice per gallon
-            self.SavedGPM = float(count) / ((now - last) / 60.0) / 2.0
+            # Caclulate gallon per minute (counter returns gallons)
+            self.SavedGPM = float(count) / ((now - last) / 60.0)
 
         return self.SavedGPM
 
