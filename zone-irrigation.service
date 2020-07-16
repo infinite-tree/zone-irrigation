@@ -4,7 +4,7 @@
 
  [Service]
  Type=idle
- ExecStart=/usr/bin/env IS_PROD=1 /usr/bin/python /home/pi/zone-irrigation/zone-irrigation.py
+ ExecStart=/usr/bin/env PRODUCTION=1 /usr/bin/python /home/pi/zone-irrigation/zone-irrigation.py
  User=pi
  Group=pi
  Restart=always
