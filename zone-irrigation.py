@@ -4,25 +4,29 @@
 Script to turn on/off irrigastion valves
 """
 import datetime
-import glob
 import json
 import logging
 import logging.handlers
 import os
 import pytz
-import serial
-import subprocess
 import sys
 import time
 
-from flask import Flask
+from flask import (Flask,
+                   jsonify,
+                   render_template,
+                   request)
 from apscheduler.schedulers.background import BackgroundScheduler
-from influxdb import InfluxDBClient
+
+import arduinoInterface
+import influxwrapper
 
 DEFAULT_SERIAL_DEVICE = "/dev/ttyUSB0"
 LOG_FILE = "~/logs/zone_irrigation.log"
 CONFIG_FILE = os.path.expanduser("~/.zone-irrigation.config")
 INFLUXDB_CONFIG_FILE = os.path.expanduser("~/.influxdb.config")
+
+PUMP_CONTROL = "outlet_on"
 
 MULTI_LOOPS = 2
 ON_PAUSE = 20
@@ -33,32 +37,15 @@ LOOP_DELAY = 1
 app = Flask(__name__)
 
 config = {
-    "valves": {
-        1: {
-            "minutes": 360.0,
-        },
-        2: {
-            "minutes": 360.0,
-        },
-        3: {
-            "minutes": 360.0,
-        },
-        4: {
-            "minutes": 360.0,
-        },
-        5: {
-            "minutes": 360.0,
-        },
-        6: {
-            "minutes": 0.0,
-        },
-        7: {
-            "minutes": 0.5,
-        }
-    },
+    "valves": 2,
      "site": {
         "location": "FIELD1",
         "controller": "irrigation1"
+    },
+    "status": {
+        "running": False,
+        "remaining": 0.0,
+        "open_valves": []
     }
 }
 
@@ -75,7 +62,6 @@ def valves():
     open_valves = app.controller.Arduino.getOpenValves()
     for valve in app.controller.Valves:
         v[valve.Number] = valve.Number in open_valves
-
     return json.dumps(v)
 
 @app.route("/gpm")
@@ -86,15 +72,59 @@ def gpm():
 def start():
     data = request.form
     print("DATA: %s"%(data))
-    return json.dumps({"sucess": True})
+    try:
+        hours = int(data["hours"])
+    except Exception as e:
+        hours = 0
+
+    print("HOURS: %d"%hours)
+    ret = False
+    if hours:
+        ret = app.controller.start(hours)
+    return json.dumps({"success": ret})
+
+@app.route("/status", methods=["GET"])
+def status():
+    msg = app.controller.getStatusMessage()
+    state = "OFF"
+    if app.controller.isRunning():
+        state = "RUNNING"
+        if "start" in msg.lower():
+            state = "STARTING"
+        elif "stop" in msg.lower():
+            state = "STOPPING"
+
+    status = {
+                "status": state,
+                "message": msg,
+                "percent": app.controller.getPercentComplete()
+
+            }
+    return json.dumps(status)
+
+@app.route("/stop", methods=["POST"])
+def stop():
+    ret = app.controller.stop()
+    return json.dumps({"success": ret})
+
+@app.route("/pump_control", methods=["GET"])
+def pump_control():
+    return json.dumps({PUMP_CONTROL:app.controller.isRunning()})
+
+@app.route('/', methods=['GET'])
+def main():
+    return render_template("index.html")
+
+@app.errorhandler(404)
+def not_found(e):
+    message = "404 We couldn't find the page"
+    return render_template("index.html", error_message=message)
 
 
 ###################################################################
 # Controller routines
 ###################################################################
-def writeState(name, conf):
-    global config
-    config["zones"][name] = conf
+def writeConfigState():
     with open(CONFIG_FILE, "w") as f:
         f.write(json.dumps(config, sort_keys=True, indent=4, separators=(',', ': ')))
 
@@ -112,113 +142,28 @@ def getNextDatetime(hour):
     return datetime.datetime.combine(day, next_time)
 
 
-class Arduino(object):
-    def __init__(self, log):
-        self.Log = log
-        self.Stream = None
-        self._newSerial()
-        self.Running = False
-
-    def _newSerial(self):
-        '''
-        Reset the serial device using the DTR lines
-        '''
-        try:
-            self.Stream.close()
-        except:
-            pass
-
-        serial_devices = glob.glob("/dev/ttyUSB*")
-        if len(serial_devices) < 1:
-            self.Log.error("No Serial devices detected. Restarting ...")
-            subprocess.call("sudo reboot", shell=True)
-
-        self.SerialDevice = sorted(serial_devices)[-1]
-        self.Stream = serial.Serial(self.SerialDevice, 57600, timeout=1)
-
-        if self._sendData('I') == 'I':
-            return
-        # still not reset
-        self.Log.error("Failed to reset Serial!!!")
-
-    def resetSerial(self):
-        try:
-            self.Stream.close()
-        except:
-            pass
-
-        # FIXME: match device to the actual
-        subprocess.call("sudo ./usbreset /dev/bus/usb/001/002", shell=True, cwd=os.path.expanduser("~/"))
-        time.sleep(2)
-        self._newSerial()
-
-    def _readResponse(self):
-        try:
-            response = self.Stream.readline().decode('utf-8').strip()
-            while len(response) > 0 and response.startswith('D'):
-                self.Log.debug(response)
-                response = self.Stream.readline().decode('utf-8').strip()
-        except Exception as e:
-            self.Log.error("Serial exception: %s" % (e), exc_info=1)
-            self.resetSerial()
-
-        self.Log.debug("SERIAL - Response: '%s'"%(response))
-        return response
-
-    def _sendData(self, value):
-        self._readResponse()
-        v = bytes(value, 'utf-8')
-        self.Log.debug("SERIAL - Sending: %s"%(v))
-        self.Stream.write(v)
-        return self._readResponse()
-
-    def handleDebugMessages(self):
-        self._readResponse()
-
-    def getOpenValves(self):
-        valves = self._sendData("V")
-        return [int(c) for c in valves]
-
-    def getWaterCounter(self):
-        # This should only be called via the WaterMeter class
-        try:
-            return int(self._sendData("W"))
-        except Exception:
-            self.Log.error("Int conversion failed for Arduino.getWaterCounter()")
-            return 0
-
-    def toggleValve(self, valve):
-        if self._sendData(str(valve)) == str(valve):
-            return True
-        return False
-
-    def checkStartButton(self):
-        return self._sendData('S') == 'S'
-
-    def enterProgramMode(self):
-        self.Running = True
-        return self._sendData('P') == 'P'
-
-    def leaveProgramMode(self):
-        self.Running = False
-        return self._sendData('p') == 'p'
-
-    def isProgramRunning(self):
-        return self.Running
+def prettyTimeDelta(seconds):
+    seconds = int(seconds)
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    if days > 0:
+        return '%d days & %d hours' % (days, hours)
+    elif hours > 0:
+        return '%d hours and %d minutes' % (hours, minutes)
+    elif minutes > 0:
+        return '%d minutes' % (minutes)
+    else:
+        return 'less than a minute'
 
 
 class Valve(object):
-    def __init__(self, number, log, conf, influx, arduino):
+    def __init__(self, number, log, influx, arduino):
         self.Number = number
         self.Log = log
-        self.Config = config
         self.Influx = influx
         self.Arduino = arduino
         self.Running = False
-
-    @property
-    def Duration(self):
-        return self.Config["minutes"]
 
     def isOn(self):
         self.Running = self.Number in self.Arduino.getOpenValves()
@@ -251,8 +196,8 @@ class WaterMeter(object):
         self.Influx = influx
         self.Log = log
         self.Arduino = arduino
-        self.LastWaterReading = time.time()
-        self.LastGPMRequest = time.time()
+        self.LastWaterReading = time.time() - 60
+        self.LastGPMRequest = time.time() - 60
         self.SavedGPM = 0.0
 
     @property
@@ -274,76 +219,6 @@ class WaterMeter(object):
         return self.SavedGPM
 
 
-class InfluxWrapper(object):
-    def __init__(self, log, influx_config, site_config):
-        self.Influx = InfluxDBClient(influx_config['host'],
-                                     influx_config['port'],
-                                     influx_config['login'],
-                                     influx_config['password'],
-                                     influx_config['database'],
-                                     ssl=True,
-                                     timeout=60)
-        self.Log = log
-        self.Points = []
-        self.Location = site_config['location']
-        self.Controller = site_config['controller']
-        self.LastSent = datetime.datetime.now()
-        self.Interval = influx_config['interval']
-        self.MaxPoints = influx_config['max_points']
-
-    def getTime(self):
-        now = datetime.datetime.utcnow()
-        return now.strftime('%Y-%m-%dT%H:%M:%SZ')
-
-    def writePoints(self):
-        ret = None
-
-        # drop old points if there are too many
-        if len(self.Points) > self.MaxPoints:
-            self.Points = self.Points[self.MaxPoints:]
-
-        for x in range(10):
-            try:
-                ret = self.Influx.write_points(self.Points)
-            except Exception as e:
-                self.Log.error("Influxdb point failure: %s"%(e))
-                ret = 0
-            if ret:
-                self.Log.info("%s - Sent %d points to Influx"%(datetime.datetime.now(), len(self.Points)))
-                self.LastSent = datetime.datetime.now()
-                self.Points = []
-                return ret
-
-            time.sleep(0.2)
-
-        self.Log.error("%s - Failed to send %d points to Influx: %s"%(datetime.datetime.now(), len(self.Points), ret))
-        return ret
-
-    def sendMeasurement(self, measurement, tags, value):
-        point = {
-            "measurement": measurement,
-            "tags": {
-                "location": self.Location,
-                "controller": self.Controller
-            },
-            "time": self.getTime(),
-            "fields": {
-                "value": value
-            }
-        }
-        point['tags'].update(tags)
-
-        self.Points.append(point)
-
-        now = datetime.datetime.now()
-        if len(self.Points) >= self.MaxPoints or (now - self.LastSent).seconds >= self.Interval:
-            return self.writePoints()
-        return True
-
-    def query(self, *args, **kwargs):
-        return self.Influx.query(*args, **kwargs)
-
-
 class IrrigationController(object):
     def __init__(self, log, valves, water_meter, influx, arduino, config):
         self.Log = log
@@ -351,23 +226,116 @@ class IrrigationController(object):
         self.WaterMeter = water_meter
         self.Influx = influx
         self.Arduino = arduino
+        self.Config = config
+        self.Config.setdefault("status", {"running": False, "remaining": 0.0, "open_valves": []})
         self.LastGPMTime = time.time()
+        self.StatusMessage = "OFF"
+        self.StartTime = None
+        self.RunTime = None
 
-    def startCancelCheck(self):
-        # FIXME: implement
-        return
+    def getStatusMessage(self):
+        return self.StatusMessage
+    
+    def isRunning(self):
+        return self.Config["status"]["running"]
+    
+    def getPercentComplete(self):
+        if self.StartTime is None:
+            return 0
+
+        elapsed = time.time() - self.StartTime
+        return int((elapsed / self.RunTime)*100)
+    
+    def openAllValves(self):
+        for valve in self.Valves:
+            valve.on()
+            if not valve.Number in self.Config["status"]["open_valves"]:
+                self.Config["status"]["open_valves"].append(x)
+    
+    def closeAllValves(self):
+        for valve in self.Valves:
+            valve.off()
+            if valve.Number in self.Config["status"]["open_valves"]:
+                self.Config["status"]["open_valves"].remove(x)
+
+    def start(self, hours):
+        # Open the valves first
+        self.openAllValves()
+        
+        # River pump will query /pump_control and start/stop based on the result
+        self.StatusMessage = "Starting Pump"
+        self.Config["status"]["running"] = True
+        self.Config["status"]["remaining"] = float(hours*60*60)
+        writeConfigState()
+    
+    def stop(self):
+        self.StatusMessage = "Stopping"
+        self.StartTime = None
+        self.RunTime = None
+        self.Config["status"]["running"] = False
+        self.Config["status"]["remaining"] = 0.0
+        writeConfigState()
+        # Valves will close in the run loop after water has stopped flowing
 
     def run(self):
         self.Arduino.handleDebugMessages()
         self.Log.info("%s - Loop" % (datetime.datetime.now()))
+        now = time.time()
+
+        #
+        # Handle runtime
+        #
+        if self.isRunning():
+            # TWater just started flowing. Start the timer
+            if self.WaterMeter.SavedGPM > 0 and self.StartTime is None:
+                if not self.StartTime:
+                    self.StartTime = now
+                    self.RunTime = self.Config["status"]["remaining"]
+            else:
+                    self.StatusMessage = "Starting Pump"
+
+            if not self.StartTime is None:
+                # Update the remaining time
+                remaining = self.RunTime - (now - self.StartTime)
+                if remaining <= 0.0:
+                    self.stop()
+                else:
+                    self.Config["status"]["remaining"] = remaining
+                    self.StatusMessage = "%s remaining"%(prettyTimeDelta(remaining))
+                    writeConfigState()
+
+
+        # 
+        # Handle Valves
+        # 
+        if self.Config["status"]["running"]:
+            # If the valve is already open, this does nothing
+            self.openAllValves()
+        else:
+            # The pump will eventually turn off when it reads /pump_control
+            # Once the water is done flowing through the lines, the valves can be closed
+            if self.WaterMeter.SavedGPM <= 0:
+                # If the valve is already closed, this does nothing
+                if self.Arduino.getOpenValves():
+                    self.closeAllValves()
+                    writeConfigState()
+            else:
+                self.StatusMessage = "OFF"
+
+
+        # 
+        # Send Data to Influx
+        # 
         self.Influx.sendMeasurement("water_gallons", {}, self.WaterMeter.GPM)
+        self.Influx.sendMeasurement("remaining_time", {}, self.Config["status"]["remaining"])
+        self.Influx.sendMeasurement("remaining_percent", {}, self.getPercentComplete())
 
         open_valves = self.Arduino.getOpenValves()
         for valve in self.Valves:
             self.Influx.sendMeasurement("open_valve", {"valve":str(valve.Number)}, 1.0 if valve.Number in open_valves else 0.0)
 
-        self.Influx.sendMeasurement("program_running", {}, self.Arduino.isProgramRunning())
-        # self.refuelCheck(60)
+        self.Influx.sendMeasurement("program_running", {}, self.isRunning())
+
 
 def reboot(log):
     # if os.path.isfile(os.path.expanduser("~/.reboot")):
@@ -409,15 +377,15 @@ def main():
         log.error("No config file '%s' found. Defaulting to builtin config"%(CONFIG_FILE))
 
     log.info("%s - Initializing Influx"%(datetime.datetime.now()))
-    influx = InfluxWrapper(log, influx_config, config['site'])
+    influx = influxwrapper.InfluxWrapper(log, influx_config, config['site'])
 
     log.info("%s - Initializing Arduino"%(datetime.datetime.now()))
-    arduino = Arduino(log)
+    arduino = arduinoInterface.Arduino(log)
 
     log.info("%s - Setting up valve objects"%(datetime.datetime.now()))
     valves = []
-    for number, conf in config["valves"].items():
-        valves.append(Valve(int(number), log, conf, influx, arduino))
+    for number in range(1, config["valves"]+1):
+        valves.append(Valve(int(number), log, influx, arduino))
 
     log.info("%s - Initializing Water Meter"%(datetime.datetime.now()))
     water_meter = WaterMeter(influx, arduino, log)
@@ -432,6 +400,7 @@ def main():
     log.info("%s - ENTERING RUN LOOP"%(datetime.datetime.now()))
     try:
         scheduler = BackgroundScheduler()
+        controller.run()
         job = scheduler.add_job(controller.run, 'interval', minutes=LOOP_DELAY)
         scheduler.start()
 
