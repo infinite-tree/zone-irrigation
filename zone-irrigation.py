@@ -404,7 +404,7 @@ def main():
         job = scheduler.add_job(controller.run, 'interval', minutes=LOOP_DELAY)
         scheduler.start()
 
-        IS_PROD = os.environ.get("IS_PROD", False)
+        IS_PROD = os.environ.get("PRODUCTION", False)
         app.run(debug=not IS_PROD, host="0.0.0.0", threaded=True)
     except Exception as e:
         log.error("Main loop failed: %s"%(e), exc_info=1)
