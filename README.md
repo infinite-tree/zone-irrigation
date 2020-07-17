@@ -18,6 +18,8 @@ Experimental
 ## Installation
 
 ```
+sudo apt install iptables-persistent
+pip3 install -r requirements.txt
 sudo cp zone-irrigation.service /lib/systemd/system/
 sudo systemctl enable zone-irrigation.service
 sudo systemctl start zone-rrigation.service

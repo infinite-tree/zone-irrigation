@@ -250,13 +250,13 @@ class IrrigationController(object):
         for valve in self.Valves:
             valve.on()
             if not valve.Number in self.Config["status"]["open_valves"]:
-                self.Config["status"]["open_valves"].append(x)
+                self.Config["status"]["open_valves"].append(valve.Number)
     
     def closeAllValves(self):
         for valve in self.Valves:
             valve.off()
             if valve.Number in self.Config["status"]["open_valves"]:
-                self.Config["status"]["open_valves"].remove(x)
+                self.Config["status"]["open_valves"].remove(valve.Number)
 
     def start(self, hours):
         # Open the valves first
