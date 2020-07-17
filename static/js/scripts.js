@@ -89,6 +89,7 @@ function start() {
             success: function(response) {
                 updateStartButton();
                 // progress bar update will handle the rest
+                $("#status-txt").text("Stopping");
 
             },
             error: function(jqXHR, textStatus, errorThrown){
