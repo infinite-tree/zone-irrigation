@@ -21,5 +21,7 @@ Experimental
 sudo cp zone-irrigation.service /lib/systemd/system/
 sudo systemctl enable zone-irrigation.service
 sudo systemctl start zone-rrigation.service
+sudo cp rules.v4 /etc/iptables/
+sudo restart
 ```
 
