@@ -1,23 +1,28 @@
-
 #include <Arduino.h>
+#include "analogComp.h"
 
-#define WATER_METER_PIN     2     // INT_0 is D2
-#define START_BTN_PIN       3     // INT_1 is D3
+#define START_BTN_PIN       2     // INT_0 is D2
 
-#define SWITCH_1_PIN        4     // D4
-#define SWITCH_2_PIN        5     // D5
-#define SWITCH_3_PIN        6     // D6
-#define SWITCH_4_PIN        7     // D7
-#define SWITCH_5_PIN        8     // D8
-#define SWITCH_6_PIN        9     // D9
-#define SWITCH_7_PIN        10     // D10
+#define WATER_METER_PIN     AIN0  //D6
+#define WATER_METER_REF     AIN1  //D7
 
-#define SHIFT_DATA_PIN      11     // D11
-#define SHIFT_CLK_PIN       12     // D12
-#define SHIFT_LATCH_PIN     13     // D13
+#define WATER_ANALOG_PIN    A3    // A3
+#define WATER_ANALOG_REF    A4    // A4
 
-#define VALVE_OPEN_PIN      14     // A0
-#define VALVE_CLOSE_PIN     15     // A1
+#define SWITCH_1_PIN        3     // D3
+#define SWITCH_2_PIN        4     // D4
+#define SWITCH_3_PIN        5     // D5
+#define SWITCH_4_PIN        8     // D8
+#define SWITCH_5_PIN        9     // D9
+#define SWITCH_6_PIN        10     // D10
+#define SWITCH_7_PIN        11     // D11
+
+#define SHIFT_DATA_PIN      A0     // A0
+#define SHIFT_CLK_PIN       A1     // A1
+#define SHIFT_LATCH_PIN     A2     // A2
+
+#define VALVE_OPEN_PIN       12    // D12
+#define VALVE_CLOSE_PIN      13    // D13
 
 #define SOLENOID_PULSE_LENGTH   100     // milliseconds
 #define WATER_DEBOUNCE          75      // milliseconds
@@ -62,12 +67,42 @@ void startCancelInterrupt() {
     }
 }
 
-void waterInterrupt(){
+void waterInterrupt() {
     unsigned long now = millis();
     if (now - WATER_DEBOUNCE_TIMER >= WATER_DEBOUNCE) {
         WATER_DEBOUNCE_TIMER = now;
         WATER_COUNTER++;
     }
+}
+
+void printWaterMeterValues() {
+    int total = 0;
+    int avg_value = 0;
+    int avg_ref = 0;
+
+    // Read the analog value from the hall effect sensor
+    total = 0;
+    for (int x =0; x< 16; x++) {
+        total += analogRead(WATER_ANALOG_PIN);
+    }
+    avg_value = total/16;
+
+
+    // Read the reference voltage that is being compared against
+    total = 0;
+    for (int x =0; x< 16; x++) {
+        total += analogRead(WATER_ANALOG_REF);
+    }
+    avg_ref = total/16;
+    Serial.print("D - CALIBRATION: ref: ");
+    Serial.print(avg_ref);
+    Serial.print(", meas: ");
+    Serial.print(avg_value);
+
+    Serial.print(", DIFF: ");
+    Serial.print(avg_value - avg_ref);
+    Serial.print(", cnt: ");
+    Serial.println(WATER_COUNTER);    
 }
 
 // ----------------------------------------------------------------------------
@@ -336,8 +371,10 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(START_BTN_PIN), startCancelInterrupt, LOW);
 
     // Setup the Water meter
-    pinMode(WATER_METER_PIN, INPUT);
-    attachInterrupt(digitalPinToInterrupt(WATER_METER_PIN), waterInterrupt, LOW);
+    analogComparator.setOn(WATER_METER_PIN, WATER_METER_REF);
+    analogComparator.enableInterrupt(waterInterrupt, FALLING);
+    pinMode(WATER_ANALOG_PIN, INPUT);
+    pinMode(WATER_ANALOG_PIN, OUTPUT);
 
     // Init the timers
     unsigned long now = millis();
@@ -353,6 +390,10 @@ void loop() {
     if (Serial.available() > 0) {
         char code = Serial.read();
         switch(code) {
+            case 'C':
+                printWaterMeterValues();
+                break;
+
             case 'I':
                 Serial.println('I');
                 break;

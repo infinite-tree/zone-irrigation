@@ -286,7 +286,7 @@ class IrrigationController(object):
         # Handle runtime
         #
         if self.isRunning():
-            # TWater just started flowing. Start the timer
+            # Water just started flowing. Start the timer
             if self.WaterMeter.SavedGPM > 0 and self.StartTime is None:
                 if not self.StartTime:
                     self.StartTime = now
