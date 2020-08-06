@@ -10,12 +10,12 @@
 #define WATER_ANALOG_REF    A4    // A4
 
 #define SWITCH_1_PIN        3     // D3
-#define SWITCH_2_PIN        4     // D4
-#define SWITCH_3_PIN        5     // D5
-#define SWITCH_4_PIN        8     // D8
-#define SWITCH_5_PIN        9     // D9
-#define SWITCH_6_PIN        10     // D10
-#define SWITCH_7_PIN        11     // D11
+#define SWITCH_2_PIN        8     // D4
+#define SWITCH_3_PIN        9     // D5
+#define SWITCH_4_PIN        10     // D8
+#define SWITCH_5_PIN        11    // D9
+#define SWITCH_6_PIN        4     // D10
+#define SWITCH_7_PIN        5     // D11
 
 #define SHIFT_DATA_PIN      A0     // A0
 #define SHIFT_CLK_PIN       A1     // A1
